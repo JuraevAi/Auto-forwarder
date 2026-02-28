@@ -6,7 +6,7 @@ from flask import Flask
 from threading import Thread
 
 # ==========================================
-# 1. SOZLAMALAR (Render.com dan olinadi)
+# 1. SOZLAMALAR
 # ==========================================
 API_ID = os.environ.get("API_ID")
 API_HASH = os.environ.get("API_HASH")
@@ -16,19 +16,19 @@ DESTINATION_CHANNEL = os.environ.get("DESTINATION_CHANNEL")
 REPLACEMENT_TEXT = os.environ.get("REPLACEMENT_TEXT", DESTINATION_CHANNEL)
 
 SOURCE_CHATS_RAW = os.environ.get("SOURCE_CHATS", "")
-# Kanallarni tozalab ro'yxatga olamiz
-SOURCE_CHATS = [chat.strip().replace("@", "") for chat in SOURCE_CHATS_RAW.split(",") if chat.strip()]
+# Kanallarni kichik harflarda, probel va @ belgisiz tozalab olamiz
+SOURCE_CHATS = [chat.strip().replace("@", "").lower() for chat in SOURCE_CHATS_RAW.split(",") if chat.strip()]
 
 QIDIRUV_ANDOZASI = r'@[A-Za-z0-9_]+|https?://[^\s]+|t\.me/[^\s]+'
 
 # ==========================================
-# 2. WEB SERVER (Render uxlamasligi uchun)
+# 2. WEB SERVER
 # ==========================================
 app_web = Flask(__name__)
 
 @app_web.route('/')
 def home():
-    return "Userbot 24/7 faol ishlamoqda!"
+    return "Mustahkam Userbot 24/7 faol ishlamoqda!"
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
@@ -57,33 +57,41 @@ def matnni_tahrirlash(matn: str) -> str:
         return ""
     return re.sub(QIDIRUV_ANDOZASI, REPLACEMENT_TEXT, matn)
 
-# XATOLIK BERGAN QATOR TO'G'RILANDI: `& ~filters.edited` olib tashlandi
-@userbot.on_message(filters.chat(SOURCE_CHATS))
+# ==========================================
+# MUHIM QISM: Hamma kanallarni eshitamiz va ichidan saralaymiz (100% ishonchli usul)
+# ==========================================
+@userbot.on_message(filters.channel)
 async def xabar_kelganda(client: Client, message: Message):
     try:
-        asl_matn = message.text or message.caption or ""
-        tozalan_matn = matnni_tahrirlash(asl_matn)
-
-        if message.text:
-            await client.send_message(
-                chat_id=DESTINATION_CHANNEL,
-                text=tozalan_matn,
-                disable_web_page_preview=True
-            )
-            print("Matnli xabar yuborildi!")
+        # Xabar kelgan kanalning usernamesini olamiz
+        kanal_username = message.chat.username
+        
+        # Agar kanalning username'i bizning ro'yxatda bo'lsa, ishni boshlaymiz
+        if kanal_username and kanal_username.lower() in SOURCE_CHATS:
             
-        elif message.media:
-            await client.copy_message(
-                chat_id=DESTINATION_CHANNEL,
-                from_chat_id=message.chat.id,
-                message_id=message.id,
-                caption=tozalan_matn
-            )
-            print("Media xabar yuborildi!")
+            asl_matn = message.text or message.caption or ""
+            tozalan_matn = matnni_tahrirlash(asl_matn)
+
+            if message.text:
+                await client.send_message(
+                    chat_id=DESTINATION_CHANNEL,
+                    text=tozalan_matn,
+                    disable_web_page_preview=True
+                )
+                print(f"Matnli xabar yuborildi! (Manba: @{kanal_username})")
+                
+            elif message.media:
+                await client.copy_message(
+                    chat_id=DESTINATION_CHANNEL,
+                    from_chat_id=message.chat.id,
+                    message_id=message.id,
+                    caption=tozalan_matn
+                )
+                print(f"Media xabar yuborildi! (Manba: @{kanal_username})")
 
     except Exception as e:
         print(f"Xatolik yuz berdi: {e}")
 
 if __name__ == "__main__":
-    print("Userbot ishga tushmoqda...")
+    print("Mustahkam Userbot ishga tushmoqda...")
     userbot.run()
