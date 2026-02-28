@@ -1,6 +1,5 @@
 import os
 import re
-import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from flask import Flask
@@ -16,14 +15,14 @@ SESSION_STRING = os.environ.get("SESSION_STRING")
 DESTINATION_CHANNEL = os.environ.get("DESTINATION_CHANNEL") 
 REPLACEMENT_TEXT = os.environ.get("REPLACEMENT_TEXT", DESTINATION_CHANNEL)
 
-# Qaysi kanallardan xabar olinadi? (Masalan: kunuz, daryo_uz)
 SOURCE_CHATS_RAW = os.environ.get("SOURCE_CHATS", "")
+# Kanallarni tozalab ro'yxatga olamiz
 SOURCE_CHATS = [chat.strip().replace("@", "") for chat in SOURCE_CHATS_RAW.split(",") if chat.strip()]
 
 QIDIRUV_ANDOZASI = r'@[A-Za-z0-9_]+|https?://[^\s]+|t\.me/[^\s]+'
 
 # ==========================================
-# 2. WEB SERVER (Render botni uxlashiga yo'l qo'ymasligi uchun)
+# 2. WEB SERVER (Render uxlamasligi uchun)
 # ==========================================
 app_web = Flask(__name__)
 
@@ -46,7 +45,6 @@ if not SESSION_STRING:
     print("XATOLIK: SESSION_STRING kiritilmagan!")
     exit()
 
-# Botni ishga tushirish
 userbot = Client(
     "avto_forwarder",
     api_id=API_ID,
@@ -55,19 +53,17 @@ userbot = Client(
 )
 
 def matnni_tahrirlash(matn: str) -> str:
-    """Begona link va usernamelarni o'chirib, o'zimiznikini qo'yish"""
     if not matn:
         return ""
     return re.sub(QIDIRUV_ANDOZASI, REPLACEMENT_TEXT, matn)
 
-# Xabarlarni ushlab olish va kanalga tashlash
-@userbot.on_message(filters.chat(SOURCE_CHATS) & ~filters.edited)
+# XATOLIK BERGAN QATOR TO'G'RILANDI: `& ~filters.edited` olib tashlandi
+@userbot.on_message(filters.chat(SOURCE_CHATS))
 async def xabar_kelganda(client: Client, message: Message):
     try:
         asl_matn = message.text or message.caption or ""
         tozalan_matn = matnni_tahrirlash(asl_matn)
 
-        # Matnli xabar bo'lsa
         if message.text:
             await client.send_message(
                 chat_id=DESTINATION_CHANNEL,
@@ -76,7 +72,6 @@ async def xabar_kelganda(client: Client, message: Message):
             )
             print("Matnli xabar yuborildi!")
             
-        # Rasm, video yoki boshqa media bo'lsa
         elif message.media:
             await client.copy_message(
                 chat_id=DESTINATION_CHANNEL,
