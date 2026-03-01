@@ -4,7 +4,7 @@ import asyncio
 from threading import Thread
 from flask import Flask
 from pyrogram import Client, filters, compose
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
 # ==========================================
 # Asyncio xatoligini oldini olish
@@ -16,13 +16,20 @@ except RuntimeError:
     asyncio.set_event_loop(loop)
 
 # ==========================================
-# 1. SOZLAMALAR (Render maxfiy seyfidan olinadi)
+# 1. SOZLAMALAR VA XATOLIKLARNI KESISH
 # ==========================================
-API_ID = os.environ.get("API_ID")
-API_HASH = os.environ.get("API_HASH")
-SESSION_STRING = os.environ.get("SESSION_STRING")
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = os.environ.get("ADMIN_ID")
+# API_ID albatta raqam (int) bo'lishi shart, shuni ta'minlaymiz!
+try:
+    API_ID = int(os.environ.get("API_ID", 0))
+except ValueError:
+    print("XATOLIK: API_ID faqat raqamlardan iborat bo'lishi kerak!")
+    exit()
+
+API_HASH = os.environ.get("API_HASH", "").strip()
+SESSION_STRING = os.environ.get("SESSION_STRING", "").strip()
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+ADMIN_ID_STR = os.environ.get("ADMIN_ID", "0")
+ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR.isdigit() else 0
 
 DESTINATION_CHANNEL = os.environ.get("DESTINATION_CHANNEL", "").strip()
 REPLACEMENT_TEXT = os.environ.get("REPLACEMENT_TEXT", DESTINATION_CHANNEL)
@@ -30,8 +37,9 @@ DEST_CLEAN = DESTINATION_CHANNEL.replace("https://t.me/", "").replace("@", "").l
 
 QIDIRUV_ANDOZASI = r'@[A-Za-z0-9_]+|https?://[^\s]+|t\.me/[^\s]+'
 
-# Xotirada saqlanuvchi kanallar ro'yxati (Boshlang'ich holatda Renderdan yuklanadi)
+# Xotiradagi kanallar ro'yxati va Admin holati (State)
 kuzatiladigan_kanallar = []
+admin_holati = {} # Admindan matn kutish uchun
 
 def init_channels():
     raw = os.environ.get("SOURCE_CHATS", "")
@@ -43,42 +51,37 @@ def init_channels():
 init_channels()
 
 # ==========================================
-# 2. WEB SERVER (Render uxlamasligi uchun)
+# 2. WEB SERVER
 # ==========================================
 app_web = Flask(__name__)
 
 @app_web.route('/')
 def home():
-    return "Gibrid Userbot va Bot 24/7 faol ishlamoqda!"
+    return "Tugmali Gibrid Tizim 24/7 faol ishlamoqda!"
 
 def run_server():
     port = int(os.environ.get("PORT", 8080))
     app_web.run(host='0.0.0.0', port=port)
 
-server_thread = Thread(target=run_server)
-server_thread.daemon = True
-server_thread.start()
+Thread(target=run_server, daemon=True).start()
 
 # ==========================================
 # 3. KLIENTLARNI YARATISH
 # ==========================================
-if not SESSION_STRING or not BOT_TOKEN or not ADMIN_ID:
-    print("XATOLIK: Maxfiy kalitlar to'liq kiritilmagan!")
+if not API_ID or not API_HASH or not SESSION_STRING or not BOT_TOKEN:
+    print("XATOLIK: Barcha kalitlar to'liq emas. Render sozlamalarini tekshiring!")
     exit()
 
-ADMIN_ID = int(ADMIN_ID)
 BOT_ID = None
-
 userbot = Client("aygoqchi", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 bot = Client("boshqaruvchi", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 def matnni_tahrirlash(matn: str) -> str:
-    if not matn:
-        return ""
+    if not matn: return ""
     return re.sub(QIDIRUV_ANDOZASI, REPLACEMENT_TEXT, matn)
 
 # ==========================================
-# 4. USERBOT (Ayg'oqchi) - Ma'lumot tutuvchi
+# 4. USERBOT (Ayg'oqchi)
 # ==========================================
 @userbot.on_message(filters.channel)
 async def xabar_kelganda(client: Client, message: Message):
@@ -90,26 +93,16 @@ async def xabar_kelganda(client: Client, message: Message):
         kanal_username = message.chat.username.lower() if message.chat.username else ""
         kanal_id = str(message.chat.id)
 
-        # O'ziga-o'zi cheksiz yuborishni bloklash
         if kanal_username == DEST_CLEAN or kanal_id == DEST_CLEAN:
             return
 
-        # Kanal ro'yxatda bormi?
-        match_found = False
-        for target in kuzatiladigan_kanallar:
-            if target == kanal_username or target == kanal_id or target in kanal_username:
-                match_found = True
-                break
+        match_found = any(t == kanal_username or t == kanal_id or t in kanal_username for t in kuzatiladigan_kanallar)
 
         if match_found:
             asl_matn = message.text or message.caption or ""
-            tozalan_matn = matnni_tahrirlash(asl_matn)
-            
-            # Yashirin kod qo'shamiz, toki Oddiy Bot buni oddiy xabar emasligini bilsin
-            maxsus_belgi = "🔔YANGI_XABAR_KODI🔔\n"
-            yuborish_matni = f"{maxsus_belgi}{tozalan_matn}"
+            toz_matn = matnni_tahrirlash(asl_matn)
+            yuborish_matni = f"🔔YANGI_XABAR_KODI🔔\n{toz_matn}"
 
-            # Userbot tozalangan xabarni Oddiy Botga (orqa fonda) jo'natadi
             if message.text:
                 await client.send_message(chat_id=BOT_ID, text=yuborish_matni)
             elif message.media:
@@ -119,106 +112,141 @@ async def xabar_kelganda(client: Client, message: Message):
         print(f"Userbot xatosi: {e}")
 
 # ==========================================
-# 5. ODDIY BOT (Menejer) - Tasdiqlash va Boshqaruv
+# 5. ADMIN PANEL (TUGMALAR VA XABARLAR)
 # ==========================================
+def bosh_menyu_tugmalari():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 Kuzatilayotgan kanallar", callback_data="menyu_royxat")],
+        [
+            InlineKeyboardButton("➕ Kanal qo'shish", callback_data="menyu_qoshish"),
+            InlineKeyboardButton("➖ O'chirish", callback_data="menyu_ochirish")
+        ]
+    ])
+
 @bot.on_message(filters.private)
-async def bot_boshqaruv(client: Client, message: Message):
+async def xabarlarni_qabul_qilish(client: Client, message: Message):
     text = message.text or message.caption or ""
 
-    # A) Agar xabar Userbotdan kelgan "Yangi post" bo'lsa
+    # A) Userbotdan kelgan "Yangi post" ni tasdiqlash uchun Adminga yuborish
     if text.startswith("🔔YANGI_XABAR_KODI🔔"):
         toza_matn = text.replace("🔔YANGI_XABAR_KODI🔔\n", "")
-        
         tugmalar = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Kanalga chiqarish", callback_data="tasdiq")],
             [InlineKeyboardButton("❌ Bekor qilish", callback_data="bekor")]
         ])
         
-        # Bot xabarni Adminga tugmalar bilan jo'natadi
         if message.text:
-            await client.send_message(chat_id=ADMIN_ID, text=toza_matn, reply_markup=tugmalar, disable_web_page_preview=True)
+            await client.send_message(ADMIN_ID, toza_matn, reply_markup=tugmalar, disable_web_page_preview=True)
         elif message.media:
-            await client.copy_message(chat_id=ADMIN_ID, from_chat_id=message.chat.id, message_id=message.id, caption=toza_matn, reply_markup=tugmalar)
+            await client.copy_message(ADMIN_ID, message.chat.id, message.id, caption=toza_matn, reply_markup=tugmalar)
         return
 
-    # B) Faqat Adminga ruxsat berilgan buyruqlar
+    # B) Faqat Adminga ruxsat!
     if message.from_user.id != ADMIN_ID:
         return
 
-    if message.text.startswith("/start"):
-        yozuv = (
-            "🤖 **Gibrid Boshqaruv Paneliga xush kelibsiz!**\n\n"
-            "Men sizning ayg'oqchi Userbotingizni boshqaraman.\n\n"
-            "📋 **Buyruqlar:**\n"
-            "🔹 `/kanallar` - Kuzatilayotgan kanallar ro'yxati\n"
-            "🔹 `/qoshish @username` - Yangi kanal qo'shish\n"
-            "🔹 `/ochirish @username` - Kanalni olib tashlash"
+    # D) Bosh menyu
+    if text == "/start":
+        admin_holati[ADMIN_ID] = None # Holatni tozalaymiz
+        await message.reply_text(
+            "🎛 **Asosiy Boshqaruv Paneliga xush kelibsiz!**\n\nQuyidagi tugmalar orqali botni boshqaring:",
+            reply_markup=bosh_menyu_tugmalari()
         )
-        await message.reply_text(yozuv)
-
-    elif message.text.startswith("/kanallar"):
-        if not kuzatiladigan_kanallar:
-            await message.reply_text("📂 Hozircha hech qanday kanal kuzatilmayapti.")
-            return
-        royxat = "📊 **Kuzatilayotgan kanallar:**\n\n"
-        for i, k in enumerate(kuzatiladigan_kanallar, 1):
-            royxat += f"{i}. @{k}\n"
-        await message.reply_text(royxat)
-
-    elif message.text.startswith("/qoshish"):
-        try:
-            yangi = message.text.split()[1].replace("https://t.me/", "").replace("@", "").lower()
-            if yangi in kuzatiladigan_kanallar:
-                await message.reply_text("⚠️ Bu kanal allaqachon ro'yxatda bor!")
-            else:
-                kuzatiladigan_kanallar.append(yangi)
-                await message.reply_text(f"✅ @{yangi} ro'yxatga qo'shildi!")
-        except IndexError:
-            await message.reply_text("❌ Xato! Format: `/qoshish @kunuz`")
-
-    elif message.text.startswith("/ochirish"):
-        try:
-            eski = message.text.split()[1].replace("https://t.me/", "").replace("@", "").lower()
-            if eski in kuzatiladigan_kanallar:
-                kuzatiladigan_kanallar.remove(eski)
-                await message.reply_text(f"🗑 @{eski} ro'yxatdan o'chirildi!")
-            else:
-                await message.reply_text("⚠️ Bunday kanal topilmadi.")
-        except IndexError:
-            await message.reply_text("❌ Xato! Format: `/ochirish @kunuz`")
-
-# ==========================================
-# 6. TUGMALARNI QABUL QILISH (Callback)
-# ==========================================
-@bot.on_callback_query()
-async def tugma_bosildi(client: Client, callback_query):
-    # Faqat Admin bosa olishini kafolatlaymiz
-    if callback_query.from_user.id != ADMIN_ID:
-        await callback_query.answer("Sizga ruxsat yo'q!", show_alert=True)
         return
 
-    data = callback_query.data
-    
+    # E) Agar admin kanal qo'shish holatida bo'lsa va bot matn kutayotgan bo'lsa
+    if admin_holati.get(ADMIN_ID) == "kanal_kutmoqda":
+        yangi = text.strip().replace("https://t.me/", "").replace("@", "").lower()
+        if not yangi:
+            await message.reply_text("Iltimos, to'g'ri kanal nomini yuboring.")
+            return
+            
+        if yangi in kuzatiladigan_kanallar:
+            await message.reply_text(f"⚠️ **@{yangi}** allaqachon ro'yxatda bor!", reply_markup=bosh_menyu_tugmalari())
+        else:
+            kuzatiladigan_kanallar.append(yangi)
+            await message.reply_text(f"✅ **@{yangi}** muvaffaqiyatli qo'shildi!", reply_markup=bosh_menyu_tugmalari())
+        
+        # Jarayon tugadi, holatni tozalaymiz
+        admin_holati[ADMIN_ID] = None
+
+# ==========================================
+# 6. TUGMALAR BOSILGANDA (Callback)
+# ==========================================
+@bot.on_callback_query()
+async def tugma_bosildi(client: Client, cq: CallbackQuery):
+    if cq.from_user.id != ADMIN_ID:
+        await cq.answer("Sizga ruxsat yo'q!", show_alert=True)
+        return
+
+    data = cq.data
+
+    # Tasdiqlash/Bekor qilish (Postlar uchun)
     if data == "tasdiq":
         try:
-            if callback_query.message.text:
-                await client.send_message(DESTINATION_CHANNEL, callback_query.message.text, disable_web_page_preview=True)
-            elif callback_query.message.media:
-                await client.copy_message(DESTINATION_CHANNEL, callback_query.message.chat.id, callback_query.message.id, caption=callback_query.message.caption)
-            
-            await callback_query.edit_message_reply_markup(None)
-            await callback_query.answer("✅ Muvaffaqiyatli kanalga joylandi!", show_alert=True)
+            if cq.message.text:
+                await client.send_message(DESTINATION_CHANNEL, cq.message.text, disable_web_page_preview=True)
+            elif cq.message.media:
+                await client.copy_message(DESTINATION_CHANNEL, cq.message.chat.id, cq.message.id, caption=cq.message.caption)
+            await cq.edit_message_reply_markup(None)
+            await cq.answer("Xabar kanalingizga joylandi! ✅", show_alert=True)
         except Exception as e:
-            await callback_query.answer(f"Xatolik: {e}", show_alert=True)
-
+            await cq.answer(f"Xatolik: {e}", show_alert=True)
+    
     elif data == "bekor":
-        await callback_query.edit_message_reply_markup(None)
-        await callback_query.message.reply_text("❌ Xabar rad etildi va kanalga joylanmadi.")
-        await callback_query.answer("Rad etildi.")
+        await cq.edit_message_reply_markup(None)
+        await cq.message.reply_text("❌ Xabar rad etildi.")
+        await cq.answer("Rad etildi.")
+
+    # Bosh Menyuga qaytish
+    elif data == "menyu_asosiy":
+        admin_holati[ADMIN_ID] = None
+        await cq.message.edit_text("🎛 **Asosiy Boshqaruv Paneli:**", reply_markup=bosh_menyu_tugmalari())
+
+    # Kanallar ro'yxati
+    elif data == "menyu_royxat":
+        admin_holati[ADMIN_ID] = None
+        if not kuzatiladigan_kanallar:
+            matn = "📂 Hozircha hech qanday kanal kuzatilmayapti."
+        else:
+            matn = "📊 **Kuzatilayotgan kanallar:**\n\n" + "\n".join([f"{i+1}. @{k}" for i, k in enumerate(kuzatiladigan_kanallar)])
+        
+        ortga = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Ortga", callback_data="menyu_asosiy")]])
+        await cq.message.edit_text(matn, reply_markup=ortga)
+
+    # Kanal qo'shish (Holatni yoqamiz)
+    elif data == "menyu_qoshish":
+        admin_holati[ADMIN_ID] = "kanal_kutmoqda"
+        ortga = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Bekor qilish", callback_data="menyu_asosiy")]])
+        await cq.message.edit_text("✍️ **Kanal qo'shish:**\n\nIltimos, qo'shmoqchi bo'lgan kanalingizning `@username` ni yoki havolasini menga yozib yuboring.", reply_markup=ortga)
+
+    # Kanalni o'chirish (Ro'yxatni tugmalar qilib chiqaramiz)
+    elif data == "menyu_ochirish":
+        admin_holati[ADMIN_ID] = None
+        if not kuzatiladigan_kanallar:
+            await cq.answer("O'chirish uchun kanallar yo'q!", show_alert=True)
+            return
+            
+        tugmalar = []
+        # Har bir kanal uchun bittadan o'chirish tugmasi yaratamiz
+        for k in kuzatiladigan_kanallar:
+            tugmalar.append([InlineKeyboardButton(f"🗑 @{k} ni o'chirish", callback_data=f"del_{k}")])
+        tugmalar.append([InlineKeyboardButton("🔙 Ortga", callback_data="menyu_asosiy")])
+        
+        await cq.message.edit_text("Keraksiz kanalni tanlang (ustiga bosing):", reply_markup=InlineKeyboardMarkup(tugmalar))
+
+    # Aniq bir kanalni o'chirish harakati
+    elif data.startswith("del_"):
+        kanal_nomi = data.replace("del_", "")
+        if kanal_nomi in kuzatiladigan_kanallar:
+            kuzatiladigan_kanallar.remove(kanal_nomi)
+            await cq.answer(f"@{kanal_nomi} o'chirildi! ✅", show_alert=True)
+        # O'chirilgandan so'ng asosiy menyuga qaytaramiz
+        await cq.message.edit_text(f"✅ **@{kanal_nomi}** ro'yxatdan olib tashlandi.", reply_markup=bosh_menyu_tugmalari())
 
 # ==========================================
-# 7. IKKALASINI BIR VAQTDA ISHGA TUSHIRISH
+# 7. ISHGA TUSHIRISH
 # ==========================================
 if __name__ == "__main__":
-    print("Gibrid Tizim (Userbot + Oddiy Bot) ishga tushmoqda...")
+    print("Tugmali Gibrid Tizim ishga tushmoqda...")
     compose([userbot, bot])
