@@ -16,20 +16,30 @@ except RuntimeError:
     asyncio.set_event_loop(loop)
 
 # ==========================================
-# 1. SOZLAMALAR VA XATOLIKLARNI KESISH
+# 1. SOZLAMALAR VA XATOLIKLARNI ANIQLASH (YANGILANGAN)
 # ==========================================
-# API_ID albatta raqam (int) bo'lishi shart, shuni ta'minlaymiz!
+required_keys = ["API_ID", "API_HASH", "SESSION_STRING", "BOT_TOKEN", "ADMIN_ID"]
+missing_keys = [key for key in required_keys if not os.environ.get(key) or not str(os.environ.get(key)).strip()]
+
+if missing_keys:
+    print("\n" + "="*50)
+    print("❌ XATOLIK: Render sozlamalarida quyidagi kalitlar topilmadi:")
+    for mk in missing_keys:
+        print(f"   👉 {mk}")
+    print("Iltimos, Renderdagi 'Environment' bo'limiga kirib ularni to'g'rilang!")
+    print("="*50 + "\n")
+    exit()
+
 try:
-    API_ID = int(os.environ.get("API_ID", 0))
+    API_ID = int(os.environ.get("API_ID").strip())
 except ValueError:
     print("XATOLIK: API_ID faqat raqamlardan iborat bo'lishi kerak!")
     exit()
 
-API_HASH = os.environ.get("API_HASH", "").strip()
-SESSION_STRING = os.environ.get("SESSION_STRING", "").strip()
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-ADMIN_ID_STR = os.environ.get("ADMIN_ID", "0")
-ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR.isdigit() else 0
+API_HASH = os.environ.get("API_HASH").strip()
+SESSION_STRING = os.environ.get("SESSION_STRING").strip()
+BOT_TOKEN = os.environ.get("BOT_TOKEN").strip()
+ADMIN_ID = int(os.environ.get("ADMIN_ID").strip())
 
 DESTINATION_CHANNEL = os.environ.get("DESTINATION_CHANNEL", "").strip()
 REPLACEMENT_TEXT = os.environ.get("REPLACEMENT_TEXT", DESTINATION_CHANNEL)
@@ -37,9 +47,8 @@ DEST_CLEAN = DESTINATION_CHANNEL.replace("https://t.me/", "").replace("@", "").l
 
 QIDIRUV_ANDOZASI = r'@[A-Za-z0-9_]+|https?://[^\s]+|t\.me/[^\s]+'
 
-# Xotiradagi kanallar ro'yxati va Admin holati (State)
 kuzatiladigan_kanallar = []
-admin_holati = {} # Admindan matn kutish uchun
+admin_holati = {}
 
 def init_channels():
     raw = os.environ.get("SOURCE_CHATS", "")
@@ -68,10 +77,6 @@ Thread(target=run_server, daemon=True).start()
 # ==========================================
 # 3. KLIENTLARNI YARATISH
 # ==========================================
-if not API_ID or not API_HASH or not SESSION_STRING or not BOT_TOKEN:
-    print("XATOLIK: Barcha kalitlar to'liq emas. Render sozlamalarini tekshiring!")
-    exit()
-
 BOT_ID = None
 userbot = Client("aygoqchi", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 bot = Client("boshqaruvchi", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -112,7 +117,7 @@ async def xabar_kelganda(client: Client, message: Message):
         print(f"Userbot xatosi: {e}")
 
 # ==========================================
-# 5. ADMIN PANEL (TUGMALAR VA XABARLAR)
+# 5. ADMIN PANEL VA FOYDALANUVCHI MA'LUMOTLARI
 # ==========================================
 def bosh_menyu_tugmalari():
     return InlineKeyboardMarkup([
@@ -127,8 +132,9 @@ def bosh_menyu_tugmalari():
 async def xabarlarni_qabul_qilish(client: Client, message: Message):
     text = message.text or message.caption or ""
 
-    # A) Userbotdan kelgan "Yangi post" ni tasdiqlash uchun Adminga yuborish
+    # A) Userbotdan kelgan xabarlarni tasdiqlash uchun
     if text.startswith("🔔YANGI_XABAR_KODI🔔"):
+        if message.from_user.id != ADMIN_ID: return
         toza_matn = text.replace("🔔YANGI_XABAR_KODI🔔\n", "")
         tugmalar = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Kanalga chiqarish", callback_data="tasdiq")],
@@ -141,21 +147,37 @@ async def xabarlarni_qabul_qilish(client: Client, message: Message):
             await client.copy_message(ADMIN_ID, message.chat.id, message.id, caption=toza_matn, reply_markup=tugmalar)
         return
 
-    # B) Faqat Adminga ruxsat!
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    # D) Bosh menyu
+    # B) /start bosilganda foydalanuvchi ma'lumotlarini (3 ta ustunlik) chiqarish
     if text == "/start":
-        admin_holati[ADMIN_ID] = None # Holatni tozalaymiz
-        await message.reply_text(
-            "🎛 **Asosiy Boshqaruv Paneliga xush kelibsiz!**\n\nQuyidagi tugmalar orqali botni boshqaring:",
-            reply_markup=bosh_menyu_tugmalari()
+        user = message.from_user
+        uid = user.id
+        name = user.first_name
+        if user.last_name: name += f" {user.last_name}"
+        uname = f"@{user.username}" if user.username else "Mavjud emas"
+
+        # Chiroyli 3 qatorlik ustun format (Barcha uchun ochiq)
+        info_text = (
+            "👤 **FOYDALANUVCHI MA'LUMOTLARI**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🆔 **ID Raqam:** `{uid}`\n"
+            f"🪪 **Ism-Familiya:** {name}\n"
+            f"🔗 **Username:** {uname}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
         )
+        
+        # Agar bu shaxs ADMIN bo'lsa, ma'lumot tagidan Boshqaruv panelini ham qo'shib beramiz
+        if uid == ADMIN_ID:
+            admin_holati[ADMIN_ID] = None 
+            info_text += "\n🎛 **Asosiy Boshqaruv Paneli:**\nBotni boshqarish uchun quyidagi tugmalardan foydalaning."
+            await message.reply_text(info_text, reply_markup=bosh_menyu_tugmalari())
+        else:
+            # Agar oddiy odam bo'lsa, faqatgina ma'lumotini tashlaydi va o'zini yaxshi bot qilib ko'rsatadi
+            info_text += "\n👋 Xush kelibsiz! Men yopiq tizimda ishlovchi yordamchi botman."
+            await message.reply_text(info_text)
         return
 
-    # E) Agar admin kanal qo'shish holatida bo'lsa va bot matn kutayotgan bo'lsa
-    if admin_holati.get(ADMIN_ID) == "kanal_kutmoqda":
+    # D) Faqat Adminga ruxsat berilgan qo'shish jarayoni
+    if message.from_user.id == ADMIN_ID and admin_holati.get(ADMIN_ID) == "kanal_kutmoqda":
         yangi = text.strip().replace("https://t.me/", "").replace("@", "").lower()
         if not yangi:
             await message.reply_text("Iltimos, to'g'ri kanal nomini yuboring.")
@@ -167,7 +189,6 @@ async def xabarlarni_qabul_qilish(client: Client, message: Message):
             kuzatiladigan_kanallar.append(yangi)
             await message.reply_text(f"✅ **@{yangi}** muvaffaqiyatli qo'shildi!", reply_markup=bosh_menyu_tugmalari())
         
-        # Jarayon tugadi, holatni tozalaymiz
         admin_holati[ADMIN_ID] = None
 
 # ==========================================
@@ -181,7 +202,6 @@ async def tugma_bosildi(client: Client, cq: CallbackQuery):
 
     data = cq.data
 
-    # Tasdiqlash/Bekor qilish (Postlar uchun)
     if data == "tasdiq":
         try:
             if cq.message.text:
@@ -198,55 +218,45 @@ async def tugma_bosildi(client: Client, cq: CallbackQuery):
         await cq.message.reply_text("❌ Xabar rad etildi.")
         await cq.answer("Rad etildi.")
 
-    # Bosh Menyuga qaytish
     elif data == "menyu_asosiy":
         admin_holati[ADMIN_ID] = None
         await cq.message.edit_text("🎛 **Asosiy Boshqaruv Paneli:**", reply_markup=bosh_menyu_tugmalari())
 
-    # Kanallar ro'yxati
     elif data == "menyu_royxat":
         admin_holati[ADMIN_ID] = None
         if not kuzatiladigan_kanallar:
             matn = "📂 Hozircha hech qanday kanal kuzatilmayapti."
         else:
             matn = "📊 **Kuzatilayotgan kanallar:**\n\n" + "\n".join([f"{i+1}. @{k}" for i, k in enumerate(kuzatiladigan_kanallar)])
-        
         ortga = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Ortga", callback_data="menyu_asosiy")]])
         await cq.message.edit_text(matn, reply_markup=ortga)
 
-    # Kanal qo'shish (Holatni yoqamiz)
     elif data == "menyu_qoshish":
         admin_holati[ADMIN_ID] = "kanal_kutmoqda"
         ortga = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Bekor qilish", callback_data="menyu_asosiy")]])
-        await cq.message.edit_text("✍️ **Kanal qo'shish:**\n\nIltimos, qo'shmoqchi bo'lgan kanalingizning `@username` ni yoki havolasini menga yozib yuboring.", reply_markup=ortga)
+        await cq.message.edit_text("✍️ **Kanal qo'shish:**\n\nIltimos, qo'shmoqchi bo'lgan kanalingizning `@username` ni yoki havolasini yuboring.", reply_markup=ortga)
 
-    # Kanalni o'chirish (Ro'yxatni tugmalar qilib chiqaramiz)
     elif data == "menyu_ochirish":
         admin_holati[ADMIN_ID] = None
         if not kuzatiladigan_kanallar:
             await cq.answer("O'chirish uchun kanallar yo'q!", show_alert=True)
             return
             
-        tugmalar = []
-        # Har bir kanal uchun bittadan o'chirish tugmasi yaratamiz
-        for k in kuzatiladigan_kanallar:
-            tugmalar.append([InlineKeyboardButton(f"🗑 @{k} ni o'chirish", callback_data=f"del_{k}")])
+        tugmalar = [[InlineKeyboardButton(f"🗑 @{k} ni o'chirish", callback_data=f"del_{k}")] for k in kuzatiladigan_kanallar]
         tugmalar.append([InlineKeyboardButton("🔙 Ortga", callback_data="menyu_asosiy")])
         
-        await cq.message.edit_text("Keraksiz kanalni tanlang (ustiga bosing):", reply_markup=InlineKeyboardMarkup(tugmalar))
+        await cq.message.edit_text("Keraksiz kanalni tanlang:", reply_markup=InlineKeyboardMarkup(tugmalar))
 
-    # Aniq bir kanalni o'chirish harakati
     elif data.startswith("del_"):
         kanal_nomi = data.replace("del_", "")
         if kanal_nomi in kuzatiladigan_kanallar:
             kuzatiladigan_kanallar.remove(kanal_nomi)
             await cq.answer(f"@{kanal_nomi} o'chirildi! ✅", show_alert=True)
-        # O'chirilgandan so'ng asosiy menyuga qaytaramiz
         await cq.message.edit_text(f"✅ **@{kanal_nomi}** ro'yxatdan olib tashlandi.", reply_markup=bosh_menyu_tugmalari())
 
 # ==========================================
 # 7. ISHGA TUSHIRISH
 # ==========================================
 if __name__ == "__main__":
-    print("Tugmali Gibrid Tizim ishga tushmoqda...")
+    print("Gibrid Tizim ishga tushmoqda...")
     compose([userbot, bot])
